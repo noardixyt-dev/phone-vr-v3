@@ -31,6 +31,10 @@ const menuOverlay = document.getElementById('menuOverlay');
 let stream = null, rafId = null, zoom = 1, eyeGap = 20;
 let menuVisible = false, menuAngle = 0, deviceYaw = 0, devicePitch = 0, lastTap = 0;
 
+// Offscreen canvas for rotation
+const rotCanvas = document.createElement('canvas');
+const rotCtx = rotCanvas.getContext('2d');
+
 // Menu UI Elements
 const menuBox = document.createElement('div'); menuBox.className='menuBox';
 const startBtn = document.createElement('button'); startBtn.className='menuBtn'; startBtn.textContent='Start Camera';
@@ -54,11 +58,20 @@ zoomSlider.oninput=e=>{ zoom=parseFloat(e.target.value); }; fpsSlider.oninput=e=
 
 function resizeCanvases(){ const dpr=window.devicePixelRatio||1; const w=window.innerWidth,h=window.innerHeight; const scale=0.85; const eyeW=Math.floor(w*scale/2), eyeH=Math.floor(h*scale); leftCanvas.style.width=rightCanvas.style.width=eyeW+'px'; leftCanvas.style.height=rightCanvas.style.height=eyeH+'px'; leftCanvas.width=rightCanvas.width=Math.floor(eyeW*dpr); leftCanvas.height=rightCanvas.height=Math.floor(eyeH*dpr); const totalWidth=eyeW*2+eyeGap; leftCanvas.style.left=`calc(50% - ${totalWidth/2}px)`; rightCanvas.style.left=`calc(50% - ${totalWidth/2}px + ${eyeW + eyeGap}px)`; leftCanvas.style.top=rightCanvas.style.top=`calc(50% - ${eyeH/2}px)`;}
 window.addEventListener('resize',resizeCanvases);
-function ensureRotated(svw,svh){if(svh<=svw) return {src:video,w:svw,h:svh}; if(rotCanvas.width!==svh||rotCanvas.height!==svw){rotCanvas.width=svh; rotCanvas.height=svw;} rotCtx.save(); rotCtx.clearRect(0,0,rotCanvas.width,rotCanvas.height); rotCtx.translate(rotCanvas.width,0); rotCtx.rotate(Math.PI/2); rotCtx.drawImage(video,0,0,svw,svh); rotCtx.restore(); return {src:rotCanvas,w:rotCanvas.width,h:rotCanvas.height};}
+
+function ensureRotated(svw,svh){
+  if(svh<=svw) return {src:video,w:svw,h:svh};
+  if(rotCanvas.width!==svh||rotCanvas.height!==svw){rotCanvas.width=svh; rotCanvas.height=svw;}
+  rotCtx.save(); rotCtx.clearRect(0,0,rotCanvas.width,rotCanvas.height);
+  rotCtx.translate(rotCanvas.width,0); rotCtx.rotate(Math.PI/2);
+  rotCtx.drawImage(video,0,0,svw,svh);
+  rotCtx.restore();
+  return {src:rotCanvas,w:rotCanvas.width,h:rotCanvas.height};
+}
 
 let landscape=true;
 window.addEventListener('orientationchange',()=>{ landscape=window.orientation===90||window.orientation===-90; });
-window.addEventListener('deviceorientation', e=>{ const alpha = e.alpha||0, beta=e.beta||0, gamma=e.gamma||0; if(landscape){ deviceYaw=alpha; devicePitch=beta;}else{deviceYaw=alpha; devicePitch=gamma;}});
+window.addEventListener('deviceorientation', e=>{ const alpha=e.alpha||0, beta=e.beta||0, gamma=e.gamma||0; if(landscape){deviceYaw=alpha; devicePitch=beta;}else{deviceYaw=alpha; devicePitch=gamma;}});
 
 window.addEventListener('pointerdown', e=>{ const now=Date.now(); if(now-lastTap<300){ menuVisible=!menuVisible; menuOverlay.style.display=menuVisible?'block':'none'; if(menuVisible) menuAngle=deviceYaw; } lastTap=now; });
 
@@ -74,7 +87,20 @@ function drawCrosshair(ctx){
 function checkCrosshairClick(){ if(!menuVisible) return; const rect=menuBox.getBoundingClientRect(); const cx=window.innerWidth/2, cy=window.innerHeight/2; if(cx>=rect.left && cx<=rect.right && cy>=rect.top && cy<=rect.bottom){ const elements=menuBox.children; for(let el of elements){ if(el.tagName==='BUTTON') el.click(); }} }
 window.addEventListener('click', checkCrosshairClick);
 
-function drawLoop(){ const ctxL=leftCanvas.getContext('2d'), ctxR=rightCanvas.getContext('2d'); const svw=video.videoWidth, svh=video.videoHeight; if(!svw||!svh){ rafId=requestAnimationFrame(drawLoop); return; } const {src,w,h}=ensureRotated(svw,svh); [ctxL,ctxR].forEach(ctx=>{ ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height); const sw=w/zoom, sh=h/zoom, sx=(w-sw)/2, sy=(h-sh)/2; ctx.drawImage(src,sx,sy,sw,sh,0,0,ctx.canvas.width,ctx.canvas.height); drawCrosshair(ctx); }); drawMenu(ctxL,leftCanvas); rafId=requestAnimationFrame(drawLoop);}
+function drawLoop(){
+  const ctxL=leftCanvas.getContext('2d'), ctxR=rightCanvas.getContext('2d');
+  const svw=video.videoWidth, svh=video.videoHeight;
+  if(!svw||!svh){ rafId=requestAnimationFrame(drawLoop); return; }
+  const {src,w,h}=ensureRotated(svw,svh);
+  [ctxL,ctxR].forEach(ctx=>{
+    ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
+    const sw=w/zoom, sh=h/zoom, sx=(w-sw)/2, sy=(h-sh)/2;
+    ctx.drawImage(src,sx,sy,sw,sh,0,0,ctx.canvas.width,ctx.canvas.height);
+    drawCrosshair(ctx);
+  });
+  drawMenu(ctxL,leftCanvas);
+  rafId=requestAnimationFrame(drawLoop);
+}
 
 startCameraFunc();
 </script>
