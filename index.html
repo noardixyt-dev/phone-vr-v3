@@ -26,22 +26,17 @@
 const video = document.getElementById('video');
 const leftCanvas = document.getElementById('left');
 const rightCanvas = document.getElementById('right');
-const zoomControl = document.createElement('input');
-zoomControl.type = 'range'; zoomControl.min='1'; zoomControl.max='2'; zoomControl.step='0.01'; zoomControl.value='1';
-const zoomVal = document.createElement('span'); zoomVal.textContent='1.00';
-const mirrorChk = document.createElement('input'); mirrorChk.type='checkbox';
 
 let stream = null;
-let usingFacingMode = 'environment';
 let rafId = null;
-let zoom = parseFloat(zoomControl.value);
-let mirror = false;
+let zoom = 1;
 let eyeGap = 20;
 
 const rotCanvas = document.createElement('canvas'), rotCtx = rotCanvas.getContext('2d');
 
-let menuAngle = 0; // current angle of the menu relative to forward
 let menuVisible = false;
+let menuAngle = 0; // the angle where the menu is spawned
+let deviceYaw = 0, devicePitch = 0;
 
 function stopStream() {
   if (stream) { stream.getTracks().forEach(t=>t.stop()); stream=null; }
@@ -51,7 +46,7 @@ function stopStream() {
 async function startCamera() {
   stopStream();
   try {
-    const constraints = { audio:false, video:{ facingMode:{ideal:usingFacingMode}, width:{ideal:1920}, height:{ideal:1080} } };
+    const constraints = { audio:false, video:{ facingMode:{ideal:'environment'}, width:{ideal:1920}, height:{ideal:1080} } };
     stream = await navigator.mediaDevices.getUserMedia(constraints);
     video.srcObject = stream;
     await video.play();
@@ -59,8 +54,6 @@ async function startCamera() {
     drawLoop();
   } catch(err) { alert('Camera error: '+(err.message||err)); console.error(err); }
 }
-
-async function tryFlipCamera() { usingFacingMode = usingFacingMode==='environment'?'user':'environment'; await startCamera(); }
 
 function resizeCanvases() {
   const dpr=window.devicePixelRatio||1;
@@ -71,24 +64,12 @@ function resizeCanvases() {
   leftCanvas.style.height = rightCanvas.style.height = eyeH+'px';
   leftCanvas.width = rightCanvas.width = Math.floor(eyeW*dpr);
   leftCanvas.height = rightCanvas.height = Math.floor(eyeH*dpr);
-
   const totalWidth = eyeW*2 + eyeGap;
   leftCanvas.style.left = `calc(50% - ${totalWidth/2}px)`;
   rightCanvas.style.left = `calc(50% - ${totalWidth/2}px + ${eyeW + eyeGap}px)`;
   leftCanvas.style.top = rightCanvas.style.top = `calc(50% - ${eyeH/2}px)`;
 }
 window.addEventListener('resize', resizeCanvases);
-
-zoomControl.addEventListener('input', e=>{ zoom=parseFloat(e.target.value)||1; zoomVal.textContent=zoom.toFixed(2); });
-mirrorChk.addEventListener('change', e=>{ mirror=e.target.checked; });
-
-async function enumerateCameras() {
-  try{
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const cams = devices.filter(d=>d.kind==='videoinput');
-  } catch(err) { console.warn(err); }
-}
-enumerateCameras();
 
 function ensureRotated(svw, svh){
   if(svh <= svw) return {src:video,w:svw,h:svh};
@@ -99,20 +80,21 @@ function ensureRotated(svw, svh){
   return {src:rotCanvas,w:rotCanvas.width,h:rotCanvas.height};
 }
 
-let deviceOrientation = 0;
 window.addEventListener('deviceorientation', e=>{
-  deviceOrientation = e.alpha || 0; // yaw
+  deviceYaw = e.alpha || 0; // left-right rotation
+  devicePitch = e.beta || 0; // up-down rotation
 });
 
 function drawMenu(ctx, canvas){
   if(!menuVisible) return;
   const w = 160, h = 90;
   const centerX = canvas.width/2, centerY = canvas.height/2;
-  const radius = 200; // fixed distance from center
-  // compute position based on device orientation and menuAngle
-  const angleRad = ((menuAngle - deviceOrientation) * Math.PI/180);
-  const x = centerX + radius * Math.sin(angleRad) - w/2;
-  const y = centerY - h/2;
+  const radius = 200;
+  // Mirror the rotation to make it stay in place relative to world
+  const yawOffset = ((menuAngle - deviceYaw + 360) % 360) * Math.PI/180;
+  const pitchOffset = ((0 - devicePitch) * Math.PI/180); // simple up/down mapping
+  const x = centerX + radius * Math.sin(yawOffset) - w/2;
+  const y = centerY - radius * Math.sin(pitchOffset) - h/2;
   ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(x, y, w, h);
   ctx.fillStyle='white'; ctx.font='14px sans-serif';
   ctx.fillText('Start Camera', x+10, y+25);
@@ -133,7 +115,6 @@ function drawLoop(){
   const svw = video.videoWidth, svh = video.videoHeight;
   if(!svw || !svh){ rafId=requestAnimationFrame(drawLoop); return; }
   const {src,w,h} = ensureRotated(svw, svh);
-
   [ctxL, ctxR].forEach(ctx=>{
     ctx.clearRect(0,0,ctx.canvas.width, ctx.canvas.height);
     const sw = w/zoom, sh = h/zoom;
@@ -142,12 +123,11 @@ function drawLoop(){
     drawCrosshair(ctx);
     drawMenu(ctx, ctx.canvas);
   });
-
   rafId=requestAnimationFrame(drawLoop);
 }
 
-// Show menu in front of you
-window.addEventListener('click', ()=>{ menuVisible = true; menuAngle = deviceOrientation; });
+// Spawn menu in front of user
+window.addEventListener('click', ()=>{ menuVisible = true; menuAngle = deviceYaw; });
 
 startCamera();
 </script>
