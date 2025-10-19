@@ -1,182 +1,662 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VR Camera HUD</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1" />
+<title>VR Camera HUD — World-Locked Menu</title>
 <style>
-html, body { margin:0; padding:0; width:100%; height:100%; background:#000; overflow:hidden; font-family:system-ui,sans-serif; }
-#container { position:relative; width:100%; height:100vh; }
-.eyeCanvas { position:absolute; top:0; left:0; background:#000; }
-.crosshair { position:absolute; width:20px; height:20px; border:2px solid white; border-radius:50%; transform:translate(-50%,-50%); pointer-events:none; transition:all 0.1s; }
-.menuBox { position:absolute; display:flex; flex-direction:row; gap:8px; padding:8px; background:rgba(0,0,0,0.8); border-radius:10px; pointer-events:auto; box-shadow:0 0 20px rgba(0,0,0,0.5); }
-.menuBtn { background:linear-gradient(135deg,#222,#555); color:#fff; border:none; padding:6px 10px; border-radius:6px; font-size:13px; cursor:pointer; transition:all 0.15s; }
-.menuBtn:hover { background:linear-gradient(135deg,#555,#222); }
-.menuSlider { width:100px; }
-.sliderLabel { color:#fff; font-size:12px; text-align:center; margin-bottom:2px; }
-#rotateNotice { position:absolute; width:100%; height:100%; display:flex; justify-content:center; align-items:center; background:#000; color:#fff; font-size:18px; text-align:center; display:none; z-index:1000;}
+  :root { --bg:#000; --panel: rgba(0,0,0,0.82); --accent1: #2b2b2b; --accent2:#555; --white:#fff; }
+  html,body { height:100%; margin:0; background:var(--bg); color:var(--white); font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial; -webkit-user-select:none; user-select:none; overflow:hidden;}
+  #container { position:relative; width:100%; height:100vh; touch-action:none; }
+  canvas.eye { position:absolute; top:0; left:0; background:#000; z-index:1; }
+  .menu { position:absolute; display:flex; flex-direction:row; gap:8px; align-items:center; padding:8px; background:var(--panel); border-radius:10px; z-index:2; pointer-events:auto; box-shadow:0 8px 30px rgba(0,0,0,0.6); }
+  .menu button { background:linear-gradient(135deg,var(--accent1),var(--accent2)); color:var(--white); border:0; padding:6px 10px; border-radius:8px; font-size:13px; cursor:pointer; }
+  .menu button:active { transform:translateY(1px); }
+  .menu .col { display:flex; flex-direction:column; align-items:center; gap:6px; }
+  .menu .label { font-size:12px; color:#ddd; margin-bottom:4px; text-align:center; }
+  .menu input[type="range"] { width:120px; }
+  .cross { position:absolute; width:22px; height:22px; border-radius:50%; border:2px solid #fff; transform:translate(-50%,-50%); z-index:3; pointer-events:none; transition:all 0.08s ease; background:transparent; box-sizing:border-box; }
+  .cross.filled { background:#fff; }
+  #rotateNotice { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; z-index:9999; background:#000; color:#fff; text-align:center; padding:20px; font-size:18px; }
+  /* start overlay */
+  #startOverlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; z-index:9998; pointer-events:auto; }
+  #startOverlay button { padding:14px 18px; font-size:16px; border-radius:10px; border:none; background:linear-gradient(135deg,#111,#333); color:#fff; }
 </style>
 </head>
 <body>
 <div id="container">
-  <canvas id="left" class="eyeCanvas"></canvas>
-  <canvas id="right" class="eyeCanvas"></canvas>
-  <div id="crossLeft" class="crosshair"></div>
-  <div id="crossRight" class="crosshair"></div>
-  <div id="rotateNotice">Please rotate your phone to landscape mode for VR view</div>
+  <canvas id="leftEye" class="eye"></canvas>
+  <canvas id="rightEye" class="eye"></canvas>
+
+  <div id="menuLeft" class="menu" style="display:none"></div>
+  <div id="menuRight" class="menu" style="display:none"></div>
+
+  <div id="crossLeft" class="cross" style="display:none"></div>
+  <div id="crossRight" class="cross" style="display:none"></div>
+
+  <div id="rotateNotice" style="display:none">Please rotate your phone to <b>landscape</b> for VR view.</div>
+
+  <div id="startOverlay"><button id="startBtn">Start Camera</button></div>
 </div>
-<video id="video" autoplay playsinline muted style="display:none;"></video>
+
+<video id="video" autoplay playsinline muted style="display:none"></video>
 
 <script>
-const video = document.getElementById('video');
-const leftCanvas = document.getElementById('left');
-const rightCanvas = document.getElementById('right');
+/* -------------------------
+  Full working VR HUD page
+   - Dual-eye canvases
+   - World-locked (spawned) menu
+   - Per-eye crosshairs on top
+   - Landscape-only; start camera via explicit user gesture
+   - Hover/fill crosshair when pointing at menu
+-------------------------*/
+
+const leftCanvas = document.getElementById('leftEye');
+const rightCanvas = document.getElementById('rightEye');
+const menuLeft = document.getElementById('menuLeft');
+const menuRight = document.getElementById('menuRight');
 const crossLeft = document.getElementById('crossLeft');
 const crossRight = document.getElementById('crossRight');
 const rotateNotice = document.getElementById('rotateNotice');
+const startOverlay = document.getElementById('startOverlay');
+const startBtn = document.getElementById('startBtn');
+const video = document.getElementById('video');
 
-let stream=null, rafId=null, zoom=1, eyeGap=20;
-let menuVisible=false, alwaysShowCross=false, lastTap=0;
+let stream = null;
+let raf = null;
+let zoom = 1;
+let fps = 30;
+let eyeGap = 24; // pixels gap between canvases (in CSS px)
+let menuVisible = false;
+let alwaysShowCross = false;
+let lastTap = 0;
 
-const rotCanvas = document.createElement('canvas');
-const rotCtx = rotCanvas.getContext('2d');
+// world-locked menu spawn yaw/pitch (degrees)
+let menuSpawn = { yaw: 0, pitch: 0, distance: 1.0 }; // store orientation at spawn
+// current device orientation
+let device = { yaw: 0, pitch: 0 };
 
-const menuLeft=document.createElement('div');
-const menuRight=document.createElement('div');
-[menuLeft, menuRight].forEach(mb=>{
-  mb.className='menuBox';
-  mb.style.display='none';
-  document.getElementById('container').appendChild(mb);
-});
+// offscreen rotation canvas to correct portrait video
+const rot = document.createElement('canvas');
+const rotCtx = rot.getContext('2d');
 
-function createMenu(mb){
-  const startBtn=document.createElement('button'); startBtn.textContent='Start Camera'; startBtn.className='menuBtn';
-  const flipBtn=document.createElement('button'); flipBtn.textContent='Flip Camera'; flipBtn.className='menuBtn';
-  const fsBtn=document.createElement('button'); fsBtn.textContent='Fullscreen'; fsBtn.className='menuBtn';
+// helpers for angle wrap/delta
+function wrap360(a){ a %= 360; if(a<0) a+=360; return a; }
+function shortestAngleDelta(from, to){ // result in [-180,180]
+  let d = (to - from + 540) % 360 - 180;
+  return d;
+}
 
-  const zoomDiv=document.createElement('div');
-  const zoomLabel=document.createElement('div'); zoomLabel.className='sliderLabel'; zoomLabel.textContent='Zoom';
-  const zoomSlider=document.createElement('input'); zoomSlider.type='range'; zoomSlider.min='1'; zoomSlider.max='2'; zoomSlider.step='0.01'; zoomSlider.value='1'; zoomSlider.className='menuSlider';
-  zoomSlider.oninput=e=>{zoom=parseFloat(e.target.value);};
-  zoomDiv.appendChild(zoomLabel); zoomDiv.appendChild(zoomSlider);
+// Build menu content (horizontal) — reuse same structure for left+right
+function buildMenu(mb){
+  mb.innerHTML = ''; // clear
+  // Start / Flip / Fullscreen buttons
+  const btnStart = document.createElement('button'); btnStart.textContent='Start Camera';
+  const btnFlip  = document.createElement('button'); btnFlip.textContent='Flip Camera';
+  const btnFS    = document.createElement('button'); btnFS.textContent='Fullscreen';
+  btnStart.onclick = onStartCamera;
+  btnFlip.onclick  = onFlipCamera;
+  btnFS.onclick    = toggleFullscreen;
 
-  const fpsDiv=document.createElement('div');
-  const fpsLabel=document.createElement('div'); fpsLabel.className='sliderLabel'; fpsLabel.textContent='FPS';
-  const fpsSlider=document.createElement('input'); fpsSlider.type='range'; fpsSlider.min='30'; fpsSlider.max='120'; fpsSlider.step='30'; fpsSlider.value='30'; fpsSlider.className='menuSlider';
-  fpsSlider.oninput=e=>{if(stream){const track=stream.getVideoTracks()[0]; if(track.applyConstraints) track.applyConstraints({frameRate:{ideal:parseInt(fpsSlider.value,10)}});}};
-  fpsDiv.appendChild(fpsLabel); fpsDiv.appendChild(fpsSlider);
+  // Zoom
+  const zoomCol = document.createElement('div'); zoomCol.className='col';
+  const zoomLabel = document.createElement('div'); zoomLabel.className='label'; zoomLabel.textContent='Zoom';
+  const zoomRange = document.createElement('input'); zoomRange.type='range'; zoomRange.min=1; zoomRange.max=2; zoomRange.step=0.01; zoomRange.value=zoom;
+  zoomRange.oninput = e => { zoom = parseFloat(e.target.value); /* will be applied on draw */ };
 
-  const crossBtn=document.createElement('button'); crossBtn.textContent='Always Show Crosshair'; crossBtn.className='menuBtn';
-  crossBtn.onclick=()=>{alwaysShowCross=!alwaysShowCross; updateCrossVisibility();};
+  // FPS
+  const fpsCol = document.createElement('div'); fpsCol.className='col';
+  const fpsLabel = document.createElement('div'); fpsLabel.className='label'; fpsLabel.textContent='FPS';
+  const fpsRange = document.createElement('input'); fpsRange.type='range'; fpsRange.min=30; fpsRange.max=120; fpsRange.step=30; fpsRange.value=fps;
+  fpsRange.oninput = e => { fps = parseInt(e.target.value,10); applyFPS(); };
 
-  mb.appendChild(startBtn);
-  mb.appendChild(flipBtn);
-  mb.appendChild(fsBtn);
-  mb.appendChild(zoomDiv);
-  mb.appendChild(fpsDiv);
+  // Always show crosshair
+  const crossBtn = document.createElement('button'); crossBtn.textContent='Always Show Crosshair';
+  crossBtn.onclick = () => { alwaysShowCross = !alwaysShowCross; updateCrossVisibility(); crossBtn.style.opacity = alwaysShowCross ? '0.9' : '1'; };
+
+  zoomCol.appendChild(zoomLabel); zoomCol.appendChild(zoomRange);
+  fpsCol.appendChild(fpsLabel); fpsCol.appendChild(fpsRange);
+
+  // Append in horizontal order
+  mb.appendChild(btnStart);
+  mb.appendChild(btnFlip);
+  mb.appendChild(btnFS);
+  mb.appendChild(zoomCol);
+  mb.appendChild(fpsCol);
   mb.appendChild(crossBtn);
 
-  startBtn.onclick=startCamera;
-  flipBtn.onclick=flipCamera;
-  fsBtn.onclick=toggleFullscreen;
+  // expose elements for hover detection (attach as dataset)
+  mb._buttons = mb.querySelectorAll('button');
+  mb._ranges = mb.querySelectorAll('input[type=range]');
 }
-[menuLeft, menuRight].forEach(createMenu);
 
-// --- Camera ---
-async function startCamera(){
-  stopCamera();
+// camera controls
+async function onStartCamera(){
+  // browsers require user gesture — button click satisfies that.
+  startOverlay.style.display = 'none';
   try{
-    const constraints={audio:false, video:{facingMode:'environment', width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:30}}};
-    stream=await navigator.mediaDevices.getUserMedia(constraints);
-    video.srcObject=stream;
+    if(stream) { stopCamera(); }
+    const constraints = { audio:false, video:{ facingMode:'environment', width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:fps} } };
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = stream;
     await video.play();
-    resizeCanvases();
-    drawLoop();
-  }catch(e){alert('Camera error: '+e.message);}
-}
-function stopCamera(){if(stream){stream.getTracks().forEach(t=>t.stop()); stream=null;} if(rafId){cancelAnimationFrame(rafId); rafId=null;}}
-async function flipCamera(){if(!stream) return; const mode=stream.getVideoTracks()[0].getSettings().facingMode==='environment'?'user':'environment'; stopCamera(); stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:mode}}); video.srcObject=stream; await video.play();}
-function toggleFullscreen(){if(!document.fullscreenElement){document.body.requestFullscreen?.();}else{document.exitFullscreen?.();}}
-
-// --- Resize ---
-function resizeCanvases(){
-  const dpr=window.devicePixelRatio||1;
-  const w=window.innerWidth, h=window.innerHeight;
-  if(h>w){rotateNotice.style.display='flex'; return;} else {rotateNotice.style.display='none';}
-  const scale=0.85;
-  const eyeW=Math.floor(w*scale/2), eyeH=Math.floor(h*scale);
-  leftCanvas.width=rightCanvas.width=Math.floor(eyeW*dpr);
-  leftCanvas.height=rightCanvas.height=Math.floor(eyeH*dpr);
-  leftCanvas.style.width=rightCanvas.style.width=eyeW+'px';
-  leftCanvas.style.height=rightCanvas.style.height=eyeH+'px';
-  const totalWidth=eyeW*2+eyeGap;
-  leftCanvas.style.left=`calc(50% - ${totalWidth/2}px)`;
-  rightCanvas.style.left=`calc(50% - ${totalWidth/2}px + ${eyeW+eyeGap}px)`;
-  leftCanvas.style.top=rightCanvas.style.top=`calc(50% - ${eyeH/2}px)`;
-
-  // Place menus at center horizontally
-  [menuLeft, menuRight].forEach(mb=>{
-    mb.style.left=(w/2 - mb.offsetWidth/2)+'px';
-    mb.style.top=(h/2 - mb.offsetHeight/2)+'px';
-  });
-}
-window.addEventListener('resize', resizeCanvases);
-resizeCanvases();
-
-// --- Double-tap Menu ---
-window.addEventListener('pointerdown', e=>{
-  const now=Date.now();
-  if(now-lastTap<300){
-    menuVisible=!menuVisible;
-    [menuLeft, menuRight].forEach(mb=>mb.style.display=menuVisible?'flex':'none');
-    updateCrossVisibility();
+    resizeAndPosition();
+    startRenderLoop();
+  }catch(err){
+    alert('Camera error: ' + (err && err.message ? err.message : err));
+    console.error(err);
   }
-  lastTap=now;
+}
+async function onFlipCamera(){
+  // flip by stopping current and starting with opposite facingMode
+  if(!stream) return;
+  try{
+    const settings = stream.getVideoTracks()[0].getSettings();
+    const currentFacing = settings.facingMode || 'environment';
+    const nextFacing = currentFacing === 'environment' ? 'user' : 'environment';
+    stopCamera();
+    stream = await navigator.mediaDevices.getUserMedia({ audio:false, video:{ facingMode: nextFacing } });
+    video.srcObject = stream;
+    await video.play();
+    resizeAndPosition();
+  }catch(err){ console.warn(err); }
+}
+function toggleFullscreen(){
+  if(!document.fullscreenElement) document.documentElement.requestFullscreen?.();
+  else document.exitFullscreen?.();
+}
+function stopCamera(){
+  if(stream){
+    stream.getTracks().forEach(t=>t.stop());
+    stream=null;
+  }
+  if(video){ try{ video.pause(); video.srcObject=null; }catch(e){} }
+}
+
+// applyFPS: try to set track constraint
+function applyFPS(){
+  if(stream && stream.getVideoTracks && stream.getVideoTracks()[0].applyConstraints){
+    const t = stream.getVideoTracks()[0];
+    t.applyConstraints?.({ frameRate:{ ideal: fps, max: fps } }).catch(()=>{});
+  }
+}
+
+// Orientation handling: normalize yaw/pitch for spawn and current
+window.addEventListener('deviceorientation', ev=>{
+  // alpha = yaw (0..360), beta = pitch (-180..180)
+  device.yaw = (ev.alpha === null) ? device.yaw : ev.alpha;
+  device.pitch = (ev.beta === null) ? device.pitch : ev.beta;
 });
 
-function updateCrossVisibility(){
-  [crossLeft,crossRight].forEach(c=>c.style.display=(menuVisible||alwaysShowCross)?'block':'none');
-}
+// layout/resizing: create eye canvases sized and positioned horizontally with gap
+function resizeAndPosition(){
+  const dpr = window.devicePixelRatio || 1;
+  const W = window.innerWidth, H = window.innerHeight;
+  // if portrait, show rotate notice
+  if(H > W){
+    rotateNotice.style.display = 'flex';
+    // hide everything else until rotated
+    leftCanvas.style.display = 'none'; rightCanvas.style.display = 'none';
+    menuLeft.style.display = 'none'; menuRight.style.display = 'none';
+    crossLeft.style.display = 'none'; crossRight.style.display = 'none';
+    startOverlay.style.display = 'flex';
+    return;
+  } else {
+    rotateNotice.style.display = 'none';
+    leftCanvas.style.display = 'block'; rightCanvas.style.display = 'block';
+    // if menuVisible, keep menus shown
+    menuLeft.style.display = menuVisible ? 'flex' : 'none';
+    menuRight.style.display = menuVisible ? 'flex' : 'none';
+    updateCrossVisibility();
+  }
 
-// --- Video rotation ---
-function ensureRotated(){ 
-  const svw=video.videoWidth, svh=video.videoHeight;
-  if(!svw||!svh) return null;
-  if(svh<=svw) return video;
-  rotCanvas.width=svh; rotCanvas.height=svw;
-  rotCtx.save();
-  rotCtx.clearRect(0,0,rotCanvas.width,rotCanvas.height);
-  rotCtx.translate(rotCanvas.width,0);
-  rotCtx.rotate(Math.PI/2);
-  rotCtx.drawImage(video,0,0,svw,svh);
-  rotCtx.restore();
-  return rotCanvas;
-}
+  // decide eye size as scale of viewport
+  const scale = 0.85;
+  const eyeW = Math.floor(W * scale / 2);
+  const eyeH = Math.floor(H * scale);
 
-// --- Update Crosshairs ---
-function updateCrosshairs(){
-  const rectL=leftCanvas.getBoundingClientRect();
-  const rectR=rightCanvas.getBoundingClientRect();
-  crossLeft.style.left=(rectL.left+rectL.width/2)+'px';
-  crossLeft.style.top=(rectL.top+rectL.height/2)+'px';
-  crossRight.style.left=(rectR.left+rectR.width/2)+'px';
-  crossRight.style.top=(rectR.top+rectR.height/2)+'px';
-}
-
-// --- Draw Loop ---
-function drawLoop(){
-  if(!video.videoWidth){ rafId=requestAnimationFrame(drawLoop); return; }
-  const ctxL=leftCanvas.getContext('2d');
-  const ctxR=rightCanvas.getContext('2d');
-  const src=ensureRotated();
-  if(!src){ rafId=requestAnimationFrame(drawLoop); return; }
-  [ctxL,ctxR].forEach(ctx=>{
-    ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
-    ctx.drawImage(src,0,0,src.width,src.height,0,0,ctx.canvas.width,ctx.canvas.height);
+  const cssEyeGap = eyeGap; // px
+  // set canvas sizes in CSS pixels and backing store
+  [leftCanvas, rightCanvas].forEach(c=>{
+    c.style.width = eyeW + 'px';
+    c.style.height = eyeH + 'px';
+    c.width = Math.floor(eyeW * dpr);
+    c.height = Math.floor(eyeH * dpr);
   });
-  updateCrosshairs();
-  rafId=requestAnimationFrame(drawLoop);
+
+  const totalWidth = eyeW * 2 + cssEyeGap;
+  const leftX = Math.round((W - totalWidth)/2);
+  const rightX = leftX + eyeW + cssEyeGap;
+  const topY = Math.round((H - eyeH)/2);
+
+  leftCanvas.style.left = leftX + 'px';
+  leftCanvas.style.top = topY + 'px';
+  rightCanvas.style.left = rightX + 'px';
+  rightCanvas.style.top = topY + 'px';
+
+  // position menus at spawn screen position if visible — otherwise center
+  if(!menuVisible){
+    // center both menus (no visible)
+    [menuLeft, menuRight].forEach(mb=>{
+      mb.style.left = (W/2 - mb.offsetWidth/2) + 'px';
+      mb.style.top  = (H/2 - mb.offsetHeight/2) + 'px';
+    });
+  } else {
+    // will be updated by render loop from world coordinates
+  }
+
+  // place crosshairs at center of each eye (CSS coords)
+  updateCrossPositions();
 }
+
+// update crosshair DOM positions for center of each eye canvas
+function updateCrossPositions(){
+  const leftRect = leftCanvas.getBoundingClientRect();
+  const rightRect = rightCanvas.getBoundingClientRect();
+  crossLeft.style.left = (leftRect.left + leftRect.width/2) + 'px';
+  crossLeft.style.top  = (leftRect.top  + leftRect.height/2) + 'px';
+  crossRight.style.left = (rightRect.left + rightRect.width/2) + 'px';
+  crossRight.style.top  = (rightRect.top  + rightRect.height/2) + 'px';
+}
+
+// spawn/hide menu on double-tap: spawn captures current yaw/pitch as spawn basis
+window.addEventListener('pointerdown', (ev)=>{
+  const now = Date.now();
+  if(now - lastTap < 300){
+    // double tap
+    menuVisible = !menuVisible;
+    if(menuVisible){
+      // capture spawn orientation (world location)
+      menuSpawn.yaw = device.yaw;  // degrees
+      menuSpawn.pitch = device.pitch;
+      menuSpawn.distance = 1.0;    // not used for depth, but can be used later
+      // ensure menu elements built
+      buildMenusOnce();
+      menuLeft.style.display = 'flex';
+      menuRight.style.display = 'flex';
+      // ensure menus positioned immediately
+      positionWorldMenus();
+      updateCrossVisibility();
+    } else {
+      menuLeft.style.display = 'none';
+      menuRight.style.display = 'none';
+      updateCrossVisibility();
+    }
+  } else {
+    // single tap: if menu visible, treat as select action (click) at crosshair
+    if(menuVisible){
+      // simulate click on whichever menu element overlapped by center of either eye
+      trySelectUnderCrosshairs();
+    }
+  }
+  lastTap = now;
+});
+
+// build menu content only once
+let menuBuilt = false;
+function buildMenusOnce(){
+  if(menuBuilt) return;
+  buildMenu(menuLeft);
+  buildMenu(menuRight);
+  menuBuilt = true;
+}
+function buildMenu(mb){
+  // reuse same builder used earlier but local to this file
+  mb.innerHTML = '';
+  const btnStart = document.createElement('button'); btnStart.textContent='Start Camera';
+  const btnFlip  = document.createElement('button'); btnFlip.textContent='Flip Camera';
+  const btnFS    = document.createElement('button'); btnFS.textContent='Fullscreen';
+  const zoomCol  = document.createElement('div');
+  zoomCol.className = 'col';
+  const zl = document.createElement('div'); zl.className='label'; zl.textContent='Zoom';
+  const zr = document.createElement('input'); zr.type='range'; zr.min=1; zr.max=2; zr.step=0.01; zr.value = zoom; zr.oninput = e => zoom = parseFloat(e.target.value);
+  zoomCol.appendChild(zl); zoomCol.appendChild(zr);
+
+  const fpsCol = document.createElement('div');
+  fpsCol.className = 'col';
+  const fl = document.createElement('div'); fl.className='label'; fl.textContent='FPS';
+  const fr = document.createElement('input'); fr.type='range'; fr.min=30; fr.max=120; fr.step=30; fr.value = fps; fr.oninput = e => { fps = parseInt(e.target.value,10); applyFPS(); };
+  fpsCol.appendChild(fl); fpsCol.appendChild(fr);
+
+  const crossBtn = document.createElement('button'); crossBtn.textContent='Always Show Crosshair';
+  crossBtn.onclick = () => { alwaysShowCross = !alwaysShowCross; updateCrossVisibility(); crossBtn.style.opacity = alwaysShowCross ? '0.8' : '1'; };
+
+  mb.appendChild(btnStart); mb.appendChild(btnFlip); mb.appendChild(btnFS);
+  mb.appendChild(zoomCol); mb.appendChild(fpsCol); mb.appendChild(crossBtn);
+
+  // attach actions
+  btnStart.onclick = onStartCameraFromMenu;
+  btnFlip.onclick  = onFlipCameraFromMenu;
+  btnFS.onclick    = toggleFullscreen;
+}
+
+// These wrappers call the camera functions with correct gesture context
+function onStartCameraFromMenu(){ onStartCameraButton(); }
+function onFlipCameraFromMenu(){ onFlipCamera(); }
+
+// start camera when pressing main overlay start or menu start
+async function onStartCameraButton(){
+  // hide overlay & try start
+  startOverlay.style.display = 'none';
+  try {
+    if(!stream){
+      const constraints = { audio:false, video:{ facingMode:'environment', width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:fps} } };
+      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      video.srcObject = stream;
+      await video.play();
+      resizeAndPosition();
+      startRenderLoop();
+    }
+  } catch(err) {
+    alert('Camera error: ' + (err && err.message ? err.message : err));
+    console.error(err);
+  }
+}
+async function onStartCamera(){ onStartCameraButton(); } // alias
+
+startBtn.addEventListener('click', onStartCameraButton);
+
+// flip camera used by menu button already binds to flipCamera
+
+// attempt to flip camera
+async function onFlipCamera(){
+  if(!stream) return;
+  try{
+    const settings = stream.getVideoTracks()[0].getSettings();
+    const current = settings.facingMode || 'environment';
+    const next = current === 'environment' ? 'user' : 'environment';
+    stopCamera();
+    stream = await navigator.mediaDevices.getUserMedia({ audio:false, video:{ facingMode: next }});
+    video.srcObject = stream;
+    await video.play();
+    resizeAndPosition();
+  }catch(err){ console.warn(err); }
+}
+
+// ensure only one render loop runs
+function startRenderLoop(){
+  if(raf) return;
+  raf = requestAnimationFrame(renderLoop);
+}
+
+// main render loop
+function renderLoop(){
+  // ensure canvases sized (in case resize happened)
+  if(window.innerHeight <= window.innerWidth && leftCanvas.style.display !== 'none'){
+    // draw video source to both eyes
+    drawVideoToEye(leftCanvas);
+    drawVideoToEye(rightCanvas);
+    // update menu screen positions (world-locked)
+    if(menuVisible) positionWorldMenus();
+    // crosshair hover detection -> fill if pointing at a menu element
+    updateCrossHoverFill();
+    // update crosshair positions at top layer
+    updateCrossPositions();
+  }
+  raf = requestAnimationFrame(renderLoop);
+}
+
+// draw video source (video or rotated canvas) into a target eye canvas
+function drawVideoToEye(targetCanvas){
+  const ctx = targetCanvas.getContext('2d');
+  ctx.clearRect(0,0,targetCanvas.width,targetCanvas.height);
+
+  const src = rotatedSource();
+  if(!src) return;
+
+  // draw "cover" — fill the canvas while preserving aspect ratio (center-crop)
+  const sw = src.width, sh = src.height;
+  const dw = targetCanvas.width, dh = targetCanvas.height;
+  const sar = sw/sh, dar = dw/dh;
+
+  let sx=0, sy=0, sWidth=sw, sHeight=sh;
+  if(sar > dar){
+    // source wider than dest -> crop width
+    sHeight = sh;
+    sWidth = Math.round(sh * dar);
+    sx = Math.round((sw - sWidth)/2);
+  } else {
+    // source taller -> crop height
+    sWidth = sw;
+    sHeight = Math.round(sw / dar);
+    sy = Math.round((sh - sHeight)/2);
+  }
+
+  // draw the cropped area to full canvas
+  ctx.drawImage(src, sx, sy, sWidth, sHeight, 0, 0, dw, dh);
+}
+
+// returns video element or rotated canvas if needed
+function rotatedSource(){
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if(!vw || !vh) return null;
+  // if portrait video, rotate into rot canvas
+  if(vh > vw){
+    rot.width = vh; rot.height = vw;
+    rotCtx.save();
+    rotCtx.clearRect(0,0,rot.width,rot.height);
+    rotCtx.translate(rot.width, 0);
+    rotCtx.rotate(Math.PI/2);
+    rotCtx.drawImage(video, 0, 0, vw, vh);
+    rotCtx.restore();
+    return rot;
+  } else {
+    return video;
+  }
+}
+
+// world-lock: compute menu screen position for each eye canvas based on spawn yaw/pitch and current device yaw/pitch
+// menuSpawn captured when user double-tapped (menuSpawn.yaw, .pitch)
+// concept: desired screen offset = -deltaYaw mapped to pixels; same for pitch but inverted
+function positionWorldMenus(){
+  // sensitivity constants — tweak to taste
+  const yawSensitivity = 1.0;   // degrees -> pixels factor (will be scaled per-canvas)
+  const pitchSensitivity = 1.0;
+
+  const leftRect = leftCanvas.getBoundingClientRect();
+  const rightRect = rightCanvas.getBoundingClientRect();
+
+  // compute yaw difference shortest way
+  const deltaYaw = shortestAngleDelta(menuSpawn.yaw, device.yaw); // how much user turned since spawn (degrees)
+  const deltaPitch = device.pitch - menuSpawn.pitch; // degrees (positive = tilting forward/down)
+
+  // map delta to pixel offsets: we want the menu to stay fixed in world; that means it should move in screen opposite direction of rotation
+  // choose mapping so ~90deg yaw moves menu by canvas.width * 0.8 (user turns away)
+  const leftCx = leftCanvas.width / 2;
+  const leftCy = leftCanvas.height / 2;
+  const rightCx = rightCanvas.width / 2;
+  const rightCy = rightCanvas.height / 2;
+
+  // map degrees -> pixels using canvas size; these scale values control how "far" in degrees the menu remains in view
+  const yawDegToPxLeft  = leftCanvas.width  / 60; // 60 degrees => canvas width
+  const pitchDegToPxLeft= leftCanvas.height / 60;
+
+  const yawDegToPxRight  = rightCanvas.width / 60;
+  const pitchDegToPxRight= rightCanvas.height / 60;
+
+  // compute pixel offsets opposite to user's rotation
+  const offXL = - deltaYaw * yawDegToPxLeft * yawSensitivity;
+  const offYL = - deltaPitch * pitchDegToPxLeft * pitchSensitivity;
+  const offXR = - deltaYaw * yawDegToPxRight * yawSensitivity;
+  const offYR = - deltaPitch * pitchDegToPxRight * pitchSensitivity;
+
+  // compute screen coords for menus (use client rect coords)
+  const leftRectClient = leftCanvas.getBoundingClientRect();
+  const rightRectClient = rightCanvas.getBoundingClientRect();
+
+  const leftScreenX = leftRectClient.left + leftRectClient.width/2 + (offXL / (window.devicePixelRatio || 1));
+  const leftScreenY = leftRectClient.top  + leftRectClient.height/2 + (offYL / (window.devicePixelRatio || 1));
+  const rightScreenX = rightRectClient.left + rightRectClient.width/2 + (offXR / (window.devicePixelRatio || 1));
+  const rightScreenY = rightRectClient.top  + rightRectClient.height/2 + (offYR / (window.devicePixelRatio || 1));
+
+  // place menu DOM centered at these screen coords
+  menuLeft.style.left = (leftScreenX - menuLeft.offsetWidth/2) + 'px';
+  menuLeft.style.top  = (leftScreenY - menuLeft.offsetHeight/2) + 'px';
+  menuRight.style.left = (rightScreenX - menuRight.offsetWidth/2) + 'px';
+  menuRight.style.top  = (rightScreenY - menuRight.offsetHeight/2) + 'px';
+}
+
+// picks element(s) under crosshair centers and triggers click on first button overlapped
+function trySelectUnderCrosshairs(){
+  // center of left eye
+  const cxL = (leftCanvas.getBoundingClientRect().left + leftCanvas.getBoundingClientRect().width/2);
+  const cyL = (leftCanvas.getBoundingClientRect().top  + leftCanvas.getBoundingClientRect().height/2);
+  const cxR = (rightCanvas.getBoundingClientRect().left + rightCanvas.getBoundingClientRect().width/2);
+  const cyR = (rightCanvas.getBoundingClientRect().top  + rightCanvas.getBoundingClientRect().height/2);
+
+  // check left menu first
+  if(menuVisible){
+    if(pointInElement(cxL, cyL, menuLeft)) { dispatchFirstButton(menuLeft); return; }
+    if(pointInElement(cxR, cyR, menuRight)) { dispatchFirstButton(menuRight); return; }
+    // if not on menu, do nothing
+  }
+}
+function dispatchFirstButton(menuEl){
+  const btn = menuEl.querySelector('button');
+  if(btn) btn.click();
+}
+function pointInElement(x,y,el){
+  const r = el.getBoundingClientRect();
+  return x>=r.left && x<=r.right && y>=r.top && y<=r.bottom;
+}
+
+// update crosshair fill state depending on overlap with menu buttons
+function updateCrossHoverFill(){
+  if(!menuVisible && !alwaysShowCross) {
+    crossLeft.style.display = 'none';
+    crossRight.style.display = 'none';
+    return;
+  }
+  crossLeft.style.display = 'block';
+  crossRight.style.display = 'block';
+
+  const cxL = (leftCanvas.getBoundingClientRect().left + leftCanvas.getBoundingClientRect().width/2);
+  const cyL = (leftCanvas.getBoundingClientRect().top  + leftCanvas.getBoundingClientRect().height/2);
+  const cxR = (rightCanvas.getBoundingClientRect().left + rightCanvas.getBoundingClientRect().width/2);
+  const cyR = (rightCanvas.getBoundingClientRect().top  + rightCanvas.getBoundingClientRect().height/2);
+
+  // if center of left eye is over any button in the left menu -> fill
+  const hoverL = menuVisible && pointInElement(cxL, cyL, menuLeft);
+  const hoverR = menuVisible && pointInElement(cxR, cyR, menuRight);
+
+  crossLeft.classList.toggle('filled', hoverL);
+  crossRight.classList.toggle('filled', hoverR);
+}
+
+// update DOM positions of crosshairs (center of each eye)
+function updateCrossPositions(){
+  const l = leftCanvas.getBoundingClientRect();
+  crossLeft.style.left = (l.left + l.width/2) + 'px';
+  crossLeft.style.top  = (l.top  + l.height/2) + 'px';
+  const r = rightCanvas.getBoundingClientRect();
+  crossRight.style.left = (r.left + r.width/2) + 'px';
+  crossRight.style.top  = (r.top  + r.height/2) + 'px';
+}
+
+// begin rendering (called after camera start)
+function startRenderLoop(){
+  if(raf) cancelAnimationFrame(raf);
+  raf = requestAnimationFrame(function frame(){
+    renderLoop();
+    raf = requestAnimationFrame(frame);
+  });
+}
+
+// top-level render; implemented above in small pieces for clarity
+function renderLoop(){
+  if(window.innerHeight > window.innerWidth){
+    // portrait: nothing to render
+    return;
+  }
+  // draw both eyes
+  drawVideoToEye(leftCanvas);
+  drawVideoToEye(rightCanvas);
+  // position world-locked menus (they do not follow head; they're fixed by spawn values)
+  if(menuVisible) positionWorldMenus();
+  // crosshair logic
+  updateCrossHoverFill();
+  updateCrossPositions();
+}
+
+// generic draw to canvas as 'cover' (center crop)
+function drawVideoToEye(canvas){
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  const src = rotatedSource();
+  if(!src || src.width === 0) {
+    // draw placeholder
+    ctx.fillStyle = '#111';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    return;
+  }
+  const sw = src.width, sh = src.height;
+  const dw = canvas.width, dh = canvas.height;
+  const sar = sw/sh, dar = dw/dh;
+  let sx=0, sy=0, sW = sw, sH = sh;
+  if(sar > dar){
+    // crop left/right
+    sW = Math.round(sh * dar);
+    sx = Math.round((sw - sW)/2);
+  } else {
+    sH = Math.round(sw / dar);
+    sy = Math.round((sh - sH)/2);
+  }
+  ctx.drawImage(src, sx, sy, sW, sH, 0, 0, dw, dh);
+}
+
+// rotates source if needed (portrait video)
+function rotatedSource(){
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if(!vw || !vh) return null;
+  if(vh > vw){
+    rot.width = vh; rot.height = vw;
+    rotCtx.save();
+    rotCtx.clearRect(0,0,rot.width,rot.height);
+    rotCtx.translate(rot.width,0);
+    rotCtx.rotate(Math.PI/2);
+    rotCtx.drawImage(video, 0, 0, vw, vh);
+    rotCtx.restore();
+    return rot;
+  } else {
+    return video;
+  }
+}
+
+// apply initial sizing
+window.addEventListener('resize', ()=>{ resizeAndPosition(); });
+// initial build of menus (invisible until spawn)
+buildMenusOnce();
+resizeAndPosition();
+
+// helper: if user presses a menu button it may call this to start camera
+async function onStartCameraFromMenu(){
+  startOverlay.style.display='none';
+  try{ if(!stream) { await onStartCameraButton(); } } catch(e){ console.warn(e); }
+}
+// the overlay button uses same handler
+async function onStartCameraButton(){
+  if(stream) return;
+  try{
+    const constraints = { audio:false, video:{ facingMode:'environment', width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:fps} } };
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = stream;
+    await video.play();
+    resizeAndPosition();
+    startRenderLoop();
+  } catch(err){ alert('Camera error: ' + (err && err.message ? err.message : err)); }
+}
+
+// hook start overlay to this same function
+startBtn.onclick = onStartCameraButton;
+
+// ensure applying FPS constraints when changed
+function applyFPS(){
+  if(stream && stream.getVideoTracks && stream.getVideoTracks()[0].applyConstraints){
+    try{ stream.getVideoTracks()[0].applyConstraints({ frameRate:{ ideal: fps, max: fps } }); }catch(e){}
+  }
+}
+
+/* End of main code */
 </script>
 </body>
 </html>
