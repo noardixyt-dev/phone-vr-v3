@@ -5,19 +5,16 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
 <title>VR Phone Camera 3D HUD</title>
 <style>
-  html,body { height:100%; margin:0; background:#000; color:#fff; font-family:system-ui, -apple-system, sans-serif; }
-  #container { width:100%; height:100vh; display:flex; align-items:stretch; justify-content:center; overflow:hidden; position:relative; }
-  .eyeCanvas { width:50%; height:100%; display:block; background:#000; }
-  #controls { position:absolute; top:10px; left:10px; right:10px; display:flex; gap:8px; align-items:center;
-              background:rgba(0,0,0,0.35); padding:8px; border-radius:8px; backdrop-filter: blur(4px); }
-  .btn { background:#111; color:#fff; border:1px solid #333; padding:8px 10px; border-radius:6px; cursor:pointer; }
-  .btn:active { transform:translateY(1px); }
-  label { font-size:13px; display:flex; gap:6px; align-items:center; color:#ddd; }
-  input[type=range] { width:140px; }
-  #menu { position:absolute; bottom:18px; left:50%; transform:translateX(-50%); z-index:55;
-          background:rgba(0,0,0,0.6); color:#fff; padding:10px; border-radius:10px; display:none; gap:8px;
-          flex-direction:row; align-items:center; backdrop-filter: blur(6px);
-          max-width:92vw; flex-wrap:wrap; overflow:auto; }
+html,body { height:100%; margin:0; background:#000; color:#fff; font-family:system-ui,-apple-system,sans-serif; overflow:hidden; }
+#container { width:100%; height:100vh; display:flex; justify-content:center; align-items:center; position:relative; }
+.eyeCanvas { width:50%; height:100%; display:block; background:#000; }
+#controls, #menu { position:absolute; z-index:55; background:rgba(0,0,0,0.6); color:#fff; padding:8px; border-radius:10px; backdrop-filter: blur(6px); display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+#controls { top:10px; left:50%; transform:translateX(-50%); }
+#menu { bottom:20%; left:50%; transform:translateX(-50%); display:none; }
+.btn { background:#111; color:#fff; border:1px solid #333; padding:6px 10px; border-radius:6px; cursor:pointer; }
+.btn:active { transform:translateY(1px); }
+label { font-size:13px; display:flex; gap:6px; align-items:center; color:#ddd; }
+input[type=range] { width:120px; }
 </style>
 </head>
 <body>
@@ -37,7 +34,7 @@
   <div id="menu">
     <button id="menuToggle" class="btn">Menu</button>
     <select id="deviceSelect" aria-label="Camera device"></select>
-    <label>FPS <select id="fpsSelect"><option>30</option><option>60</option><option>120</option></select></label>
+    <label>FPS <select id="fpsSelect"><option value="30">30</option><option value="60">60</option><option value="120">120</option></select></label>
     <label>Zoom <input id="zoomMenu" type="range" min="1" max="2" step="0.01" value="1"> <span id="zoomMenuVal">1.00</span></label>
     <label>Eye sep <input id="sepMenu" type="range" min="-0.4" max="0.4" step="0.002" value="0.2"> <span id="sepMenuVal">0.20</span></label>
   </div>
@@ -59,7 +56,6 @@ const zoomVal = document.getElementById('zoomVal');
 const mirrorChk = document.getElementById('mirror');
 const container = document.getElementById('container');
 const menu = document.getElementById('menu');
-const menuToggle = document.getElementById('menuToggle');
 const deviceSelect = document.getElementById('deviceSelect');
 const fpsSelect = document.getElementById('fpsSelect');
 const zoomMenu = document.getElementById('zoomMenu');
@@ -72,15 +68,15 @@ let eyeSep=parseFloat(sepControl.value), zoom=parseFloat(zoomControl.value), mir
 let menuActive=false, lastTapTime=0, holding=false, activeSlider=null;
 let startHeadX=0, startValue=0;
 
-// offscreen canvas for portrait rotation
-const rotCanvas=document.createElement('canvas'), rotCtx=rotCanvas.getContext('2d');
-
-function stopStream(){ if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; } if(rafId){ cancelAnimationFrame(rafId); rafId=null; } }
+function stopStream(){ 
+  if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; } 
+  if(rafId){ cancelAnimationFrame(rafId); rafId=null; } 
+}
 
 async function startCamera(){
   stopStream();
   try{
-    const constraints={ audio:false, video:{ facingMode:{ideal:usingFacingMode}, width:{ideal:1920}, height:{ideal:1080} } };
+    const constraints={ audio:false, video:{ facingMode:{ideal:usingFacingMode}, width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:60} } };
     stream = await navigator.mediaDevices.getUserMedia(constraints);
     video.srcObject=stream;
     await video.play();
@@ -89,31 +85,54 @@ async function startCamera(){
   }catch(err){ alert('Camera error: '+(err.message||err)); console.error(err); }
 }
 
-async function tryFlipCamera(){ usingFacingMode = usingFacingMode==='environment'?'user':'environment'; await startCamera(); }
+async function tryFlipCamera(){ 
+  usingFacingMode = usingFacingMode==='environment'?'user':'environment'; 
+  await startCamera(); 
+}
 
 function resizeCanvases(){
   const dpr=window.devicePixelRatio||1;
-  const w=window.innerWidth, h=window.innerHeight, eyeW=Math.floor(w/2);
+  const w=window.innerWidth, h=window.innerHeight;
+  const eyeW = Math.floor(w/2 * 0.75); // scaled window
+  const eyeH = Math.floor(h * 0.75);
   [leftCanvas,rightCanvas].forEach(c=>{
-    c.style.width=eyeW+'px'; c.style.height=h+'px';
-    c.width=Math.max(1,Math.floor(eyeW*dpr));
-    c.height=Math.max(1,Math.floor(h*dpr));
+    c.width = Math.max(1,Math.floor(eyeW*dpr));
+    c.height = Math.max(1,Math.floor(eyeH*dpr));
+    c.style.width = eyeW+'px';
+    c.style.height = eyeH+'px';
   });
 }
 
 window.addEventListener('resize',resizeCanvases);
 
-sepControl.addEventListener('input', e=>{ eyeSep=parseFloat(e.target.value)||0; sepVal.textContent=eyeSep.toFixed(3); sepMenu.value=e.target.value; sepMenuVal.textContent=eyeSep.toFixed(3); });
-zoomControl.addEventListener('input', e=>{ zoom=parseFloat(e.target.value)||1; zoomVal.textContent=zoom.toFixed(2); zoomMenu.value=zoom; zoomMenuVal.textContent=zoom.toFixed(2); });
-sepMenu.addEventListener('input', e=>{ eyeSep=parseFloat(e.target.value)||0; sepVal.value=e.target.value; sepVal.textContent=eyeSep.toFixed(3); });
-zoomMenu.addEventListener('input', e=>{ zoom=parseFloat(e.target.value)||1; zoomControl.value=zoom; zoomVal.textContent=zoom.toFixed(2); zoomMenuVal.textContent=zoom.toFixed(2); });
+sepControl.addEventListener('input', e=>{ 
+  eyeSep=parseFloat(e.target.value)||0; 
+  sepVal.textContent=eyeSep.toFixed(3);
+  sepMenu.value=eyeSep; sepMenuVal.textContent=eyeSep.toFixed(2);
+});
+zoomControl.addEventListener('input', e=>{ 
+  zoom=parseFloat(e.target.value)||1; 
+  zoomVal.textContent=zoom.toFixed(2);
+  zoomMenu.value=zoom; zoomMenuVal.textContent=zoom.toFixed(2);
+});
+zoomMenu.addEventListener('input', e=>{
+  const v=parseFloat(e.target.value)||1;
+  zoom=v; zoomControl.value=v; zoomVal.textContent=v.toFixed(2); zoomMenuVal.textContent=v.toFixed(2);
+});
+sepMenu.addEventListener('input', e=>{
+  const v=parseFloat(e.target.value)||0;
+  eyeSep=v; sepControl.value=v; sepVal.textContent=v.toFixed(2); sepMenuVal.textContent=v.toFixed(2);
+});
 
 mirrorChk.addEventListener('change', e=>{ mirror=e.target.checked; });
 
 startBtn.addEventListener('click',startCamera);
 flipBtn.addEventListener('click',tryFlipCamera);
-fsBtn.addEventListener('click', ()=>{ if(!document.fullscreenElement){ container.requestFullscreen?.(); }else{ document.exitFullscreen?.(); } });
+fsBtn.addEventListener('click', ()=>{ 
+  if(!document.fullscreenElement){ container.requestFullscreen?.(); }else{ document.exitFullscreen?.(); } 
+});
 
+// enumerate cameras
 async function enumerateCameras(){
   try{
     const devices=await navigator.mediaDevices.enumerateDevices();
@@ -130,7 +149,7 @@ deviceSelect.addEventListener('change', async e=>{
   if(!e.target.value) return;
   stopStream();
   try{
-    const constraints={ video:{ deviceId:{exact:e.target.value}, width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:parseInt(fpsSelect.value,10)} } };
+    const constraints={ video:{ deviceId:{exact:e.target.value}, width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:60} } };
     stream=await navigator.mediaDevices.getUserMedia(constraints);
     video.srcObject=stream; await video.play(); resizeCanvases();
   }catch(err){ console.error(err); }
@@ -144,60 +163,45 @@ fpsSelect.addEventListener('change', async ()=>{
   }
 });
 
-function ensureRotated(svw,svh){
-  if(svh<=svw) return {src:video,w:svw,h:svh};
-  if(rotCanvas.width!==svh || rotCanvas.height!==svw){ rotCanvas.width=svh; rotCanvas.height=svw; }
-  rotCtx.save(); rotCtx.clearRect(0,0,rotCanvas.width,rotCanvas.height);
-  rotCtx.translate(rotCanvas.width,0); rotCtx.rotate(Math.PI/2);
-  rotCtx.drawImage(video,0,0,svw,svh); rotCtx.restore();
-  return {src:rotCanvas,w:rotCanvas.width,h:rotCanvas.height};
-}
-
-// VR crosshair & HUD drawing
+// draw loop with floating VR window and HUD-anchored menu
 function drawLoop(){
-  const ctxL=leftCanvas.getContext('2d');
-  const ctxR=rightCanvas.getContext('2d');
-  const svw=video.videoWidth, svh=video.videoHeight;
+  const ctxL = leftCanvas.getContext('2d');
+  const ctxR = rightCanvas.getContext('2d');
+  const svw = video.videoWidth, svh = video.videoHeight;
   if(!svw || !svh){ rafId=requestAnimationFrame(drawLoop); return; }
-  const {src,w,h}=ensureRotated(svw,svh);
 
-  // Determine crosshair size if over buttons/sliders
-  let crossSize=8;
-  if(menuActive){
-    const cx=leftCanvas.width/2, cy=leftCanvas.height/2;
-    const elems=[startBtn, flipBtn, fsBtn, zoomMenu, sepMenu, mirrorChk];
-    for(const el of elems){
-      const rect=el.getBoundingClientRect();
-      if(cx+container.offsetLeft>=rect.left && cx+container.offsetLeft<=rect.right &&
-         cy+container.offsetTop>=rect.top && cy+container.offsetTop<=rect.bottom){
-        crossSize=12; break;
-      }
-    }
-  }
+  const targetAspect = leftCanvas.width / leftCanvas.height;
+  const videoAspect = svw / svh;
+  let sw = svw, sh = svh, sx = 0, sy = 0;
+  if(videoAspect>targetAspect){ sw = svh*targetAspect; sx = (svw-sw)/2; } 
+  else if(videoAspect<targetAspect){ sh = svw/targetAspect; sy = (svh-sh)/2; }
 
-  [{ctx:ctxL,offset:-eyeSep/2},{ctx:ctxR,offset:eyeSep/2}].forEach(({ctx,offset})=>{
-    ctx.clearRect(0,0,leftCanvas.width,leftCanvas.height);
-    const sw=w/zoom, sh=h/zoom;
-    const sx=(w-sw)/2 + offset*w/2, sy=(h-sh)/2;
-    ctx.drawImage(src,sx,sy,sw,sh,0,0,ctx.canvas.width,ctx.canvas.height);
-
-    if(menuActive){
-      ctx.fillStyle='red';
-      ctx.beginPath();
-      const cx=ctx.canvas.width/2, cy=ctx.canvas.height/2;
-      ctx.arc(cx,cy,crossSize,0,2*Math.PI); ctx.fill();
-      ctx.strokeStyle='white';
-      ctx.beginPath();
-      ctx.moveTo(cx-crossSize-2,cy); ctx.lineTo(cx+crossSize+2,cy);
-      ctx.moveTo(cx,cy-crossSize-2); ctx.lineTo(cx,cy+crossSize+2);
-      ctx.stroke();
-    }
+  [ {ctx:ctxL,offset:-eyeSep/2}, {ctx:ctxR,offset:eyeSep/2} ].forEach(({ctx,offset})=>{
+    ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
+    const dx = ctx.canvas.width;
+    const dy = ctx.canvas.height;
+    const pxOffset = offset*sw;
+    ctx.save();
+    if(mirror) ctx.scale(-1,1), ctx.translate(-ctx.canvas.width,0);
+    ctx.drawImage(video, sx+pxOffset, sy, sw, sh, 0, 0, dx, dy);
+    // crosshair
+    const cx = ctx.canvas.width/2, cy = ctx.canvas.height/2;
+    ctx.fillStyle='red';
+    ctx.beginPath();
+    ctx.arc(cx,cy,8,0,2*Math.PI);
+    ctx.fill();
+    ctx.strokeStyle='white';
+    ctx.beginPath();
+    ctx.moveTo(cx-10,cy); ctx.lineTo(cx+10,cy);
+    ctx.moveTo(cx,cy-10); ctx.lineTo(cx,cy+10);
+    ctx.stroke();
+    ctx.restore();
   });
 
-  rafId=requestAnimationFrame(drawLoop);
+  rafId = requestAnimationFrame(drawLoop);
 }
 
-// Double-tap to toggle menu and drag logic
+// double-tap menu toggle and hold-to-drag logic
 container.addEventListener('pointerdown', e=>{
   const now=Date.now();
   if(now-lastTapTime<300){ // double-tap
@@ -208,17 +212,13 @@ container.addEventListener('pointerdown', e=>{
     lastTapTime=now;
     holding=true;
     if(menuActive){
-      const rect=zoomMenu.getBoundingClientRect();
+      const rect = zoomMenu.getBoundingClientRect();
       if(e.clientX>=rect.left && e.clientX<=rect.right && e.clientY>=rect.top && e.clientY<=rect.bottom){
-        activeSlider=zoomMenu;
-        startValue=parseFloat(zoomMenu.value);
-        startHeadX=e.clientX;
+        activeSlider = zoomMenu; startValue = parseFloat(zoomMenu.value); startHeadX = e.clientX;
       }
-      const rectSep=sepMenu.getBoundingClientRect();
+      const rectSep = sepMenu.getBoundingClientRect();
       if(e.clientX>=rectSep.left && e.clientX<=rectSep.right && e.clientY>=rectSep.top && e.clientY<=rectSep.bottom){
-        activeSlider=sepMenu;
-        startValue=parseFloat(sepMenu.value);
-        startHeadX=e.clientX;
+        activeSlider = sepMenu; startValue = parseFloat(sepMenu.value); startHeadX = e.clientX;
       }
     }
   }
@@ -230,13 +230,12 @@ container.addEventListener('pointermove', e=>{
     const sliderRange=parseFloat(activeSlider.max)-parseFloat(activeSlider.min);
     const newValue=Math.min(parseFloat(activeSlider.max),Math.max(parseFloat(activeSlider.min), startValue + deltaX/100*sliderRange));
     activeSlider.value=newValue;
-    if(activeSlider===zoomMenu){ zoom=parseFloat(newValue); zoomControl.value=newValue; zoomVal.textContent=newValue.toFixed(2); zoomMenuVal.textContent=newValue.toFixed(2);}
-    if(activeSlider===sepMenu){ eyeSep=parseFloat(newValue); sepControl.value=newValue; sepVal.textContent=newValue.toFixed(3); sepMenuVal.textContent=newValue.toFixed(3);}
+    if(activeSlider===zoomMenu){ zoom=newValue; zoomControl.value=newValue; zoomVal.textContent=newValue.toFixed(2); zoomMenuVal.textContent=newValue.toFixed(2);}
+    if(activeSlider===sepMenu){ eyeSep=newValue; sepControl.value=newValue; sepVal.textContent=newValue.toFixed(2); sepMenuVal.textContent=newValue.toFixed(2);}
   }
 });
 
 container.addEventListener('pointerup', e=>{ holding=false; activeSlider=null; });
-
 </script>
 </body>
 </html>
