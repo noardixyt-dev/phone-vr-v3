@@ -37,8 +37,6 @@ const rotateNotice = document.getElementById('rotateNotice');
 
 let stream=null, rafId=null, zoom=1, eyeGap=20;
 let menuVisible=false, alwaysShowCross=false, lastTap=0;
-let menu3DPos={x:0,y:0,z:1};
-let deviceYaw=0, devicePitch=0;
 
 const rotCanvas = document.createElement('canvas');
 const rotCtx = rotCanvas.getContext('2d');
@@ -115,19 +113,21 @@ function resizeCanvases(){
   leftCanvas.style.left=`calc(50% - ${totalWidth/2}px)`;
   rightCanvas.style.left=`calc(50% - ${totalWidth/2}px + ${eyeW+eyeGap}px)`;
   leftCanvas.style.top=rightCanvas.style.top=`calc(50% - ${eyeH/2}px)`;
+
+  // Place menus at center horizontally
+  [menuLeft, menuRight].forEach(mb=>{
+    mb.style.left=(w/2 - mb.offsetWidth/2)+'px';
+    mb.style.top=(h/2 - mb.offsetHeight/2)+'px';
+  });
 }
 window.addEventListener('resize', resizeCanvases);
 resizeCanvases();
-
-// --- Device orientation ---
-window.addEventListener('deviceorientation', e=>{ deviceYaw=e.alpha||0; devicePitch=e.beta||0; });
 
 // --- Double-tap Menu ---
 window.addEventListener('pointerdown', e=>{
   const now=Date.now();
   if(now-lastTap<300){
     menuVisible=!menuVisible;
-    if(menuVisible){ menu3DPos={x:0,y:0,z:1}; }
     [menuLeft, menuRight].forEach(mb=>mb.style.display=menuVisible?'flex':'none');
     updateCrossVisibility();
   }
@@ -173,16 +173,6 @@ function drawLoop(){
   [ctxL,ctxR].forEach(ctx=>{
     ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
     ctx.drawImage(src,0,0,src.width,src.height,0,0,ctx.canvas.width,ctx.canvas.height);
-    if(menuVisible){
-      const mb=(ctx===ctxL)?menuLeft:menuRight;
-      // map yaw/pitch to menu offset
-      const offsetX = -deviceYaw * ctx.canvas.width / 360;
-      const offsetY = devicePitch * ctx.canvas.height / 180;
-      const cx=ctx.canvas.width/2 + offsetX;
-      const cy=ctx.canvas.height/2 + offsetY;
-      mb.style.left=(cx-mb.offsetWidth/2)+'px';
-      mb.style.top=(cy-mb.offsetHeight/2)+'px';
-    }
   });
   updateCrosshairs();
   rafId=requestAnimationFrame(drawLoop);
