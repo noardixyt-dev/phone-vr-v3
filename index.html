@@ -3,24 +3,25 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>VR Camera HUD</title>
+<title>VR Camera HUD 3D Menu</title>
 <style>
-html,body{margin:0;padding:0;width:100%;height:100%;background:#000;overflow:hidden;font-family:system-ui,sans-serif;}
-#container{position:relative;width:100%;height:100vh;}
-.eyeCanvas{position:absolute;top:0;left:0;width:100%;height:100%;background:#000;}
-.crosshair{position:absolute;width:16px;height:16px;border-radius:50%;background:white;transform:translate(-50%,-50%);pointer-events:none;transition:all 0.1s;}
-.menuBox{position:absolute;top:20%;left:50%;transform:translateX(-50%);display:flex;flex-direction:row;gap:8px;padding:10px;background:rgba(0,0,0,0.8);border-radius:10px;pointer-events:auto;box-shadow:0 0 20px rgba(0,0,0,0.6);}
-.menuBtn{background:linear-gradient(135deg,#222,#555);color:#fff;border:none;padding:6px 10px;border-radius:6px;font-size:13px;cursor:pointer;transition:all 0.15s;}
-.menuBtn:hover{background:linear-gradient(135deg,#555,#222);}
-.menuSlider{width:100px;}
+html, body { margin:0; padding:0; width:100%; height:100%; background:#000; overflow:hidden; font-family:system-ui,sans-serif; }
+#container { position:relative; width:100%; height:100vh; }
+.eyeCanvas { position:absolute; top:0; left:0; width:100%; height:100%; background:#000; }
+.crosshair { position:absolute; width:16px; height:16px; border-radius:50%; border:2px solid white; box-sizing:border-box; transform:translate(-50%,-50%); pointer-events:none; transition:all 0.1s; }
+.menuBox { position:absolute; display:flex; flex-direction:row; gap:8px; padding:10px; background:rgba(0,0,0,0.8); border-radius:10px; pointer-events:auto; box-shadow:0 0 20px rgba(0,0,0,0.6); }
+.menuBtn { background:linear-gradient(135deg,#222,#555); color:#fff; border:none; padding:6px 10px; border-radius:6px; font-size:13px; cursor:pointer; transition:all 0.15s; }
+.menuBtn:hover { background:linear-gradient(135deg,#555,#222); }
+.menuSlider { width:100px; }
+.sliderLabel { color:#fff; font-size:12px; margin-bottom:2px; text-align:center; }
 </style>
 </head>
 <body>
 <div id="container">
   <canvas id="left" class="eyeCanvas"></canvas>
   <canvas id="right" class="eyeCanvas"></canvas>
-  <div id="crosshair" class="crosshair"></div>
-  <div id="menuBox" class="menuBox" style="display:none;"></div>
+  <div id="crossLeft" class="crosshair"></div>
+  <div id="crossRight" class="crosshair"></div>
 </div>
 <video id="video" autoplay playsinline muted style="display:none;"></video>
 
@@ -28,38 +29,65 @@ html,body{margin:0;padding:0;width:100%;height:100%;background:#000;overflow:hid
 const video=document.getElementById('video');
 const leftCanvas=document.getElementById('left');
 const rightCanvas=document.getElementById('right');
-const crosshair=document.getElementById('crosshair');
-const menuBox=document.getElementById('menuBox');
+const crossLeft=document.getElementById('crossLeft');
+const crossRight=document.getElementById('crossRight');
 
 let stream=null, rafId=null, zoom=1, eyeGap=20;
-let menuVisible=false, alwaysShowCrosshair=false, lastTap=0;
+let menuVisible=false, alwaysShowCross=false, lastTap=0;
 let deviceYaw=0, devicePitch=0;
+let menu3DPos={x:0, y:0, z:1}; // z is distance forward
 
 // Offscreen rotation canvas
 const rotCanvas=document.createElement('canvas');
 const rotCtx=rotCanvas.getContext('2d');
 
-// --- Menu Buttons & Sliders ---
-const startBtn=document.createElement('button'); startBtn.textContent='Start Camera'; startBtn.className='menuBtn';
-const flipBtn=document.createElement('button'); flipBtn.textContent='Flip Camera'; flipBtn.className='menuBtn';
-const fsBtn=document.createElement('button'); fsBtn.textContent='Fullscreen'; fsBtn.className='menuBtn';
-const zoomSlider=document.createElement('input'); zoomSlider.type='range'; zoomSlider.min='1'; zoomSlider.max='2'; zoomSlider.step='0.01'; zoomSlider.value='1'; zoomSlider.className='menuSlider';
-const fpsSlider=document.createElement('input'); fpsSlider.type='range'; fpsSlider.min='30'; fpsSlider.max='120'; fpsSlider.step='30'; fpsSlider.value='30'; fpsSlider.className='menuSlider';
-const crosshairToggleBtn=document.createElement('button'); crosshairToggleBtn.textContent='Always Show Crosshair'; crosshairToggleBtn.className='menuBtn';
-crosshairToggleBtn.onclick=()=>{alwaysShowCrosshair=!alwaysShowCrosshair; crosshairToggleBtn.style.background=alwaysShowCrosshair?'linear-gradient(135deg,#555,#222)':'linear-gradient(135deg,#222,#555)';};
+// --- Menu Creation ---
+const menuLeft=document.createElement('div');
+const menuRight=document.createElement('div');
+[menuLeft, menuRight].forEach(mb=>{
+  mb.className='menuBox'; 
+  mb.style.display='none'; 
+  document.getElementById('container').appendChild(mb);
+});
 
-menuBox.appendChild(startBtn);
-menuBox.appendChild(flipBtn);
-menuBox.appendChild(fsBtn);
-menuBox.appendChild(zoomSlider);
-menuBox.appendChild(fpsSlider);
-menuBox.appendChild(crosshairToggleBtn);
+// Buttons
+function createMenu(mb){
+  const startBtn=document.createElement('button'); startBtn.textContent='Start Camera'; startBtn.className='menuBtn';
+  const flipBtn=document.createElement('button'); flipBtn.textContent='Flip Camera'; flipBtn.className='menuBtn';
+  const fsBtn=document.createElement('button'); fsBtn.textContent='Fullscreen'; fsBtn.className='menuBtn';
+  const zoomDiv=document.createElement('div');
+  const zoomLabel=document.createElement('div'); zoomLabel.className='sliderLabel'; zoomLabel.textContent='Zoom';
+  const zoomSlider=document.createElement('input'); zoomSlider.type='range'; zoomSlider.min='1'; zoomSlider.max='2'; zoomSlider.step='0.01'; zoomSlider.value='1'; zoomSlider.className='menuSlider';
+  zoomSlider.oninput=e=>{zoom=parseFloat(e.target.value);};
+  zoomDiv.appendChild(zoomLabel); zoomDiv.appendChild(zoomSlider);
 
-// --- Camera Functions ---
+  const fpsDiv=document.createElement('div');
+  const fpsLabel=document.createElement('div'); fpsLabel.className='sliderLabel'; fpsLabel.textContent='FPS';
+  const fpsSlider=document.createElement('input'); fpsSlider.type='range'; fpsSlider.min='30'; fpsSlider.max='120'; fpsSlider.step='30'; fpsSlider.value='30'; fpsSlider.className='menuSlider';
+  fpsSlider.oninput=e=>{if(stream){const track=stream.getVideoTracks()[0]; if(track.applyConstraints)track.applyConstraints({frameRate:{ideal:parseInt(fpsSlider.value,10)}}); }};
+  fpsDiv.appendChild(fpsLabel); fpsDiv.appendChild(fpsSlider);
+
+  const crossBtn=document.createElement('button'); crossBtn.textContent='Always Show Crosshair'; crossBtn.className='menuBtn';
+  crossBtn.onclick=()=>{alwaysShowCross=!alwaysShowCross;};
+
+  mb.appendChild(startBtn);
+  mb.appendChild(flipBtn);
+  mb.appendChild(fsBtn);
+  mb.appendChild(zoomDiv);
+  mb.appendChild(fpsDiv);
+  mb.appendChild(crossBtn);
+
+  startBtn.onclick=startCamera;
+  flipBtn.onclick=flipCamera;
+  fsBtn.onclick=toggleFullscreen;
+}
+[menuLeft, menuRight].forEach(createMenu);
+
+// --- Camera ---
 async function startCamera(){
   stopCamera();
   try{
-    const constraints={audio:false, video:{facingMode:'environment', width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:parseInt(fpsSlider.value,10)}}};
+    const constraints={audio:false, video:{facingMode:'environment', width:{ideal:1920}, height:{ideal:1080}, frameRate:{ideal:30}}};
     stream=await navigator.mediaDevices.getUserMedia(constraints);
     video.srcObject=stream;
     await video.play();
@@ -68,20 +96,8 @@ async function startCamera(){
   }catch(e){alert('Camera error: '+e.message);}
 }
 function stopCamera(){if(stream){stream.getTracks().forEach(t=>t.stop()); stream=null;} if(rafId){cancelAnimationFrame(rafId); rafId=null;}}
-
-startBtn.onclick=startCamera;
-flipBtn.onclick=async ()=>{
-  if(!stream) return;
-  const mode=stream.getVideoTracks()[0].getSettings().facingMode==='environment'?'user':'environment';
-  const constraints={audio:false, video:{facingMode:mode}};
-  stopCamera();
-  stream=await navigator.mediaDevices.getUserMedia(constraints);
-  video.srcObject=stream;
-  await video.play();
-};
-fsBtn.onclick=()=>{if(!document.fullscreenElement){document.body.requestFullscreen?.();}else{document.exitFullscreen?.();}};
-zoomSlider.oninput=e=>{zoom=parseFloat(e.target.value);};
-fpsSlider.oninput=e=>{if(stream){const track=stream.getVideoTracks()[0]; if(track.applyConstraints)track.applyConstraints({frameRate:{ideal:parseInt(fpsSlider.value,10)}}); }}
+async function flipCamera(){if(!stream) return; const mode=stream.getVideoTracks()[0].getSettings().facingMode==='environment'?'user':'environment'; stopCamera(); stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:mode}}); video.srcObject=stream; await video.play();}
+function toggleFullscreen(){if(!document.fullscreenElement){document.body.requestFullscreen?.();}else{document.exitFullscreen?.();}}
 
 // --- Canvas Resize ---
 function resizeCanvases(){
@@ -99,6 +115,25 @@ function resizeCanvases(){
   leftCanvas.style.top=rightCanvas.style.top=`calc(50% - ${eyeH/2}px)`;
 }
 window.addEventListener('resize', resizeCanvases);
+resizeCanvases();
+
+// --- Rotation ---
+window.addEventListener('deviceorientation', e=>{ deviceYaw=e.alpha||0; devicePitch=e.beta||0; });
+
+// --- Double Tap Menu Spawn ---
+window.addEventListener('pointerdown', e=>{
+  const now=Date.now();
+  if(now-lastTap<300){
+    menuVisible=!menuVisible;
+    if(menuVisible){
+      // spawn menu in front of camera
+      menu3DPos={x:0,y:0,z:1}; // forward
+    }
+    [menuLeft, menuRight].forEach(mb=>mb.style.display=menuVisible?'flex':'none');
+    [crossLeft,crossRight].forEach(c=>c.style.display=(menuVisible||alwaysShowCross)?'block':'none');
+  }
+  lastTap=now;
+});
 
 // --- Video Rotation ---
 function ensureRotated(){ 
@@ -115,31 +150,19 @@ function ensureRotated(){
   return rotCanvas;
 }
 
-// --- Orientation Tracking ---
-window.addEventListener('deviceorientation', e=>{ deviceYaw=e.alpha||0; devicePitch=e.beta||0; });
-
-// --- Double Tap Menu Toggle ---
-window.addEventListener('pointerdown', e=>{
-  const now=Date.now();
-  if(now-lastTap<300){
-    menuVisible=!menuVisible;
-    menuBox.style.display=menuVisible?'flex':'none';
-    crosshair.style.display=(menuVisible||alwaysShowCrosshair)?'block':'none';
-  }
-  lastTap=now;
-});
-
-// --- Update Crosshair Position ---
-function updateCrosshair(){
-  if(!menuVisible&&!alwaysShowCrosshair){ crosshair.style.display='none'; return; }
-  crosshair.style.display='block';
-  crosshair.style.left=`${window.innerWidth/2}px`;
-  crosshair.style.top=`${window.innerHeight/2}px`;
+// --- Update Crosshairs ---
+function updateCrosshairs(){
+  const rectL=leftCanvas.getBoundingClientRect();
+  const rectR=rightCanvas.getBoundingClientRect();
+  crossLeft.style.left=(rectL.left+rectL.width/2)+'px';
+  crossLeft.style.top=(rectL.top+rectL.height/2)+'px';
+  crossRight.style.left=(rectR.left+rectR.width/2)+'px';
+  crossRight.style.top=(rectR.top+rectR.height/2)+'px';
 }
 
 // --- Draw Loop ---
 function drawLoop(){
-  updateCrosshair();
+  updateCrosshairs();
   if(!video.videoWidth){ rafId=requestAnimationFrame(drawLoop); return; }
   const ctxL=leftCanvas.getContext('2d');
   const ctxR=rightCanvas.getContext('2d');
@@ -148,11 +171,13 @@ function drawLoop(){
   [ctxL,ctxR].forEach(ctx=>{
     ctx.clearRect(0,0,ctx.canvas.width,ctx.canvas.height);
     ctx.drawImage(src,0,0,src.width,src.height,0,0,ctx.canvas.width,ctx.canvas.height);
-    // Render menu onto each canvas
+    // Menu 3D transform: simple yaw/pitch mapping
     if(menuVisible){
-      const rect=menuBox.getBoundingClientRect();
-      ctx.fillStyle='rgba(0,0,0,0.8)';
-      ctx.fillRect(rect.left,rect.top,rect.width,rect.height);
+      const cx=ctx.canvas.width/2 + deviceYaw*ctx.canvas.width/360;
+      const cy=ctx.canvas.height/2 - devicePitch*ctx.canvas.height/180;
+      const mb=(ctx===ctxL)?menuLeft:menuRight;
+      mb.style.left=(cx-mb.offsetWidth/2)+'px';
+      mb.style.top=(cy-mb.offsetHeight/2)+'px';
     }
   });
   rafId=requestAnimationFrame(drawLoop);
