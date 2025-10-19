@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>VR True 3D Camera Viewer</title>
+<style>
+html,body{margin:0;padding:0;height:100%;background:#000;color:#fff;font-family:system-ui,sans-serif;}
+#container{display:flex;width:100%;height:100%;}
+.eyeCanvas{width:50%;height:100%;background:#000;}
+#gazePointer{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);pointer-events:none;display:none;z-index:50;}
+#crosshairDot{width:10px;height:10px;border-radius:50%;background:white;transition:all 0.1s ease;}
+#menu{position:absolute;top:10%;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.6);padding:12px;border-radius:10px;display:flex;flex-direction:column;gap:8px;}
+.btn{background:#222;color:#fff;padding:6px 10px;border-radius:6px;border:none;cursor:pointer;}
+input[type=range]{width:150px;}
+</style>
+</head>
+<body>
+<div id="container">
+<canvas id="left" class="eyeCanvas"></canvas>
+<canvas id="right" class="eyeCanvas"></canvas>
+</div>
+<div id="gazePointer"><div id="crosshairDot"></div></div>
+<div id="menu">
+<button id="startBtn" class="btn">Start Camera</button>
+<button id="flipBtn" class="btn">Flip Camera</button>
+<label>Eye Separation <input type="range" id="eyeSep" min="0" max="0.1" step="0.001" value="0.02"></label>
+<label>True 3D Effect <input type="range" id="true3d" min="0" max="0.05" step="0.001" value="0.01"></label>
+<label>Zoom <input type="range" id="zoom" min="1" max="2" step="0.01" value="1"></label>
+<label>Wide Lens <input type="checkbox" id="wideMode"></label>
+</div>
+<video id="video" autoplay playsinline muted style="display:none"></video>
+<script>
+const leftCanvas = document.getElementById('left');
+const rightCanvas = document.getElementById('right');
+const leftCtx = leftCanvas.getContext('2d');
+const rightCtx = rightCanvas.getContext('2d');
+const video = document.getElementById('video');
+const startBtn = document.getElementById('startBtn');
+const flipBtn = document.getElementById('flipBtn');
+const eyeSepControl = document.getElementById('eyeSep');
+const true3dControl = document.getElementById('true3d');
+const zoomControl = document.getElementById('zoom');
+const wideMode = document.getElementById('wideMode');
+const gazePointer = document.getElementById('gazePointer');
+const crosshairDot = document.getElementById('crosshairDot');
+
+let stream = null;
+let usingFacingMode = 'environment';
+let rafId = null;
+let eyeSep = parseFloat(eyeSepControl.value);
+let true3D = parseFloat(true3dControl.value);
+let zoom = parseFloat(zoomControl.value);
+let menuActive = false;
+let holding = false;
+
+function resizeCanvas(){
+  const w = window.innerWidth/2;
+  const h = window.innerHeight;
+  leftCanvas.width = rightCanvas.width = w * window.devicePixelRatio;
+  leftCanvas.height = rightCanvas.height = h * window.devicePixelRatio;
+  leftCanvas.style.width = rightCanvas.style.width = w+'px';
+  leftCanvas.style.height = rightCanvas.style.height = h+'px';
+}
+window.addEventListener('resize',resizeCanvas);
+resizeCanvas();
+
+async function startCamera(){
+  if(stream){stream.getTracks().forEach(t=>t.stop());}
+  stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:usingFacingMode, width:{ideal:1920},height:{ideal:1080}},audio:false});
+  video.srcObject = stream;
+  await video.play();
+  drawLoop();
+}
+
+startBtn.onclick = startCamera;
+flipBtn.onclick = async ()=>{usingFacingMode = usingFacingMode==='environment'?'user':'environment'; await startCamera();};
+
+eyeSepControl.oninput = ()=>{eyeSep = parseFloat(eyeSepControl.value);};
+true3dControl.oninput = ()=>{true3D = parseFloat(true3dControl.value);};
+zoomControl.oninput = ()=>{zoom = parseFloat(zoomControl.value);};
+
+wideMode.onchange = async ()=>{
+  if(!stream) return;
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const cams = devices.filter(d=>d.kind==='videoinput');
+  const wide = cams.find(c=>/wide|ultra/i.test(c.label));
+  if(wide){
+    stream.getTracks().forEach(t=>t.stop());
+    stream = await navigator.mediaDevices.getUserMedia({video:{deviceId:{exact:wide.deviceId}}});
+    video.srcObject = stream;
+    await video.play();
+  }else{
+    alert('Could not switch to wide lens camera');
+    wideMode.checked=false;
+  }
+};
+
+let lastTap = 0;
+window.addEventListener('touchstart',(e)=>{
+  const now = Date.now();
+  if(now-lastTap<300){menuActive=!menuActive; document.getElementById('menu').style.display=menuActive?'flex':'none';}
+  lastTap=now;
+  holding = true;
+  gazePointer.classList.add('active');
+});
+window.addEventListener('touchend',()=>{holding=false;});
+
+function drawLoop(){
+  if(!video.videoWidth){rafId=requestAnimationFrame(drawLoop);return;}
+  const lw = leftCanvas.width, lh = leftCanvas.height;
+  const rw = rightCanvas.width, rh = rightCanvas.height;
+  const srcW = video.videoWidth, srcH = video.videoHeight;
+  const tW = srcW/zoom, tH = srcH/zoom;
+  const sX = (srcW - tW)/2, sY = (srcH - tH)/2;
+
+  // Left eye: pan left for 3D effect
+  leftCtx.clearRect(0,0,lw,lh);
+  leftCtx.drawImage(video, sX-true3D*srcW, sY, tW, tH, 0,0,lw,lh);
+
+  // Right eye: pan right for 3D effect
+  rightCtx.clearRect(0,0,rw,rh);
+  rightCtx.drawImage(video, sX+true3D*srcW, sY, tW, tH, 0,0,rw,rh);
+
+  // Crosshair per eye
+  if(menuActive){
+    const dotRadius = 10;
+    leftCtx.fillStyle='white'; leftCtx.beginPath(); leftCtx.arc(lw/2,lh/2,dotRadius,0,Math.PI*2); leftCtx.fill();
+    rightCtx.fillStyle='white'; rightCtx.beginPath(); rightCtx.arc(rw/2,rh/2,dotRadius,0,Math.PI*2); rightCtx.fill();
+  }
+  rafId = requestAnimationFrame(drawLoop);
+}
+</script>
+</body>
+</html>
